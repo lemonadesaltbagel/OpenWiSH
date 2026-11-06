@@ -30,6 +30,8 @@ const MAX_REFUSAL_STREAK: u32 = 3;
 const MAX_BACKOFF_S: f64 = 1800.0;
 /// Characters of /work/notes.md shown in a handoff.
 const MAX_NOTES_CHARS: usize = 20_000;
+/// Consecutive empty replies after which the run ends.
+const MAX_EMPTY_STREAK: u32 = 3;
 const MAX_SUBMISSION_BYTES: u64 = 2_000_000;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -64,6 +66,9 @@ pub struct State {
     pub tool_free_turns: u32,
     /// tool calls a pre_tool hook blocked (not charged)
     pub hook_blocks: u32,
+    /// replies with no text at all (not charged, not a final answer)
+    pub empty_replies: u32,
+    pub empty_streak: u32,
 }
 
 /// Machine-level settings (not part of a task).
@@ -534,6 +539,10 @@ impl Run {
     }
 
     fn act(&mut self, text: &str) -> Result<()> {
+        if text.trim().is_empty() {
+            return self.empty_reply();
+        }
+        self.state.empty_streak = 0;
         match parse(text, &self.spec.enabled_tools()) {
             Action::Error(m) => {
                 self.state.protocol_errors += 1;
@@ -544,6 +553,24 @@ impl Run {
             Action::Tool { tag, body } => self.forward(&tag, &body),
             Action::Final(text) => self.final_reply(&text),
         }
+    }
+
+    /// An empty reply is a protocol error, not a final answer. An open model sometimes ends a reply at once, for
+    /// example on an end-of-turn token written into the reply. More than MAX_EMPTY_STREAK in a row end the run.
+    fn empty_reply(&mut self) -> Result<()> {
+        self.state.empty_replies += 1;
+        self.state.empty_streak += 1;
+        if self.state.empty_streak > MAX_EMPTY_STREAK {
+            return self.finalize("", "the editor sent empty replies");
+        }
+        self.state.protocol_errors += 1;
+        self.state.next_message = format!(
+            "Your last reply was empty, with no text and no tool block. Nothing ran and nothing was charged. Send your \
+             next step. A special token such as <|im_end|> written into a reply ends some models' replies early. \
+             Build such strings in Python instead.\n{}",
+            self.budget_line()
+        );
+        Ok(())
     }
 
     /// A reply without a tool block ends the run, unless the task wants every pass used first.
@@ -1891,5 +1918,30 @@ out_dir = "attn/r{k}"
         let mut r = Run::resume(&d.path().join("run"), script(&lines), e).unwrap();
         r.run_to_end().unwrap();
         assert_eq!(read(r.dir.join("s.txt")).lines().count(), 3);
+    }
+
+    #[test]
+    fn an_empty_reply_is_a_protocol_error_not_a_final_answer() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = task(d.path(), "");
+        let ed = script(&["", "   \n", "Final: done."]);
+        let mut r = Run::create(spec, &d.path().join("run"), ed, env()).unwrap();
+        r.run_to_end().unwrap();
+        assert_eq!(r.state.empty_replies, 2);
+        assert_eq!(r.state.protocol_errors, 2);
+        assert_eq!(r.state.end_reason.as_deref(), Some("final answer"));
+        assert!(
+            turn_prompt(&r, 2).contains("Your last reply was empty"),
+            "{}",
+            turn_prompt(&r, 2)
+        );
+        // more than MAX_EMPTY_STREAK empty replies in a row end the run
+        let d2 = tempfile::tempdir().unwrap();
+        let spec2 = task(d2.path(), "");
+        let mut r2 = Run::create(spec2, &d2.path().join("run"), script(&["", "", "", "", "x"]), env()).unwrap();
+        r2.run_to_end().unwrap();
+        assert_eq!(r2.state.end_reason.as_deref(), Some("the editor sent empty replies"));
+        assert_eq!(r2.state.turn, 4);
+        assert!(r2.dir.join("final/net").exists());
     }
 }

@@ -18,6 +18,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Experiment 8 teacher-forced passes refuse a request over 6 GB of output before loading the model, as the published prompt states.
 - The experiment 8 adapter no longer follows a symlink the agent planted at `/work/gen_<k>.jsonl` when copying generation results.
 - Experiment 8 teacher-forced passes with `attn_layers` return attention probabilities. Before, layers 7 to 23 failed with `IndexError` and layer 3 returned the probabilities of layer 15: transformers returns one attention array per full-attention layer, not one per layer.
+- An empty reply is an uncharged protocol error, not a final answer. More than 3 in a row end the run. Before, an open model emitting an end-of-turn token at the start of a reply ended the run.
 
 ### Added
 

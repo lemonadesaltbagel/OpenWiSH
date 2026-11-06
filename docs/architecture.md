@@ -47,6 +47,7 @@ The protocol is plain text, so every text model works with no adapter. Published
 
 | Reply holds | Result | Charged |
 |---|---|---|
+| Nothing, or only whitespace | Error message asking for the next step. More than 3 empty replies in a row end the run | no |
 | No tool block | Final answer. A task with `require_all_passes` nudges the agent instead while passes remain, up to `max_nudges` | no |
 | Exactly one enabled tool block | One tool call | a Python run always, a probe on success |
 | Two or more tool blocks | Error message, nothing runs | no |
