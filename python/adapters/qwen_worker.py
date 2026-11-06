@@ -2,6 +2,7 @@
 with an edit applied. Runs inside a venv with vllm, transformers, safetensors and math-verify.
 
   qwen_worker.py generate       --model DIR --req REQ.json --out OUT [--edits DIR] --practice DIR
+                                (with "activations": OUT/gen_acts/, one folder per model with "both")
   qwen_worker.py teacher_forced --model DIR --req REQ.json --out OUT [--edits DIR]
   qwen_worker.py evaluate       --model DIR --set math500|gsm8k --data DIR --limit N --samples K --out OUT [--edits DIR]
 
@@ -204,8 +205,7 @@ def paired(a, b):
 
 
 def generate(args, req, ckpt_edit):
-    if req.get("activations"):
-        raise Bad("activations in generation passes are not available in this environment yet; read hidden states with a teacher_forced pass")
+    acts = None if req.get("activations") in (None, False) else check_activations(req["activations"])
     which = req.get("model", "edited")
     if which not in ("original", "edited", "both"):
         raise Bad('"model" must be "original", "edited" or "both"')
@@ -248,10 +248,94 @@ def generate(args, req, ckpt_edit):
             for r in recs:
                 f.write(json.dumps(r) + "\n")
         results[name] = recs
+    acts_info = {}
+    for name in names if acts else []:
+        sub = os.path.join(args.out, "gen_acts", *([name] if len(names) > 1 else []))
+        acts_info[name] = generation_activations(models[name], items, results[name], acts, sub)
     summary = {"ok": True, "type": "generate", "model": which, **({"summary": summarise(results[names[0]])} if len(names) == 1 else
                {"original": summarise(results["original"]), "edited": summarise(results["edited"]), "paired": paired(results["original"], results["edited"])})}
     summary["files"] = sorted(f for f in os.listdir(args.out) if not f.startswith("."))
+    if acts_info:
+        summary["activations"] = acts_info if len(names) > 1 else acts_info[names[0]]
     return summary
+
+
+# ------------------------------------------------------------------ activations of generated answers
+ACT_ANSWER_TOKENS = 8192
+N_LAYERS = 24
+
+
+def check_activations(a):
+    """The published request: {"layers": [layer indices 0..24], "mlp": true or false}."""
+    if not isinstance(a, dict) or set(a) - {"layers", "mlp"}:
+        raise Bad('"activations" must be {"layers": [layer indices 0..24], "mlp": true or false}')
+    layers = a.get("layers")
+    if not isinstance(layers, list) or not layers or not all(type(l) is int and 0 <= l <= N_LAYERS for l in layers):
+        raise Bad(f'"activations": "layers" must be a non-empty list of layer indices 0..{N_LAYERS}')
+    if len(set(layers)) != len(layers):
+        raise Bad('"activations": "layers" repeats a layer index')
+    if not isinstance(a.get("mlp", False), bool):
+        raise Bad('"activations": "mlp" must be true or false')
+    return {"layers": layers, "mlp": a.get("mlp", False)}
+
+
+def generation_activations(ckpt, items, recs, acts, out):
+    """Activations of every generated answer, as the published prompt describes them. For each requested layer l, the
+    residual stream (0 = embeddings, l = after layer l) at the last prompt token and averaged over the answer's first
+    8,192 tokens. With "mlp", the down_proj input of each requested layer below 24 (layer 24 has no MLP after it), taken
+    the same two ways. One teacher-forced read per answer over prompt + answer, with the answer tokenized again from
+    its text. Writes float16 .npy files and index.json (files, layers, and one row per answer with its grade) to `out`."""
+    import numpy as np
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(ckpt)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    model = AutoModelForCausalLM.from_pretrained(ckpt, dtype=torch.bfloat16).to(dev).eval()
+    layers = acts["layers"]
+    mlp_layers = [l for l in layers if l < len(model.model.layers)] if acts["mlp"] else []
+    H, I, N = model.config.hidden_size, model.config.intermediate_size, len(recs)
+    arrays = {"hidden_last_prompt": np.zeros((N, len(layers), H), np.float16), "hidden_mean_answer": np.zeros((N, len(layers), H), np.float16)}
+    if mlp_layers:
+        arrays["mlp_last_prompt"] = np.zeros((N, len(mlp_layers), I), np.float16)
+        arrays["mlp_mean_answer"] = np.zeros((N, len(mlp_layers), I), np.float16)
+    captured = {}
+    hooks = []
+    for l in mlp_layers:
+        def pre(mod, inp, l=l):
+            captured[l] = inp[0][0]
+        hooks.append(model.model.layers[l].mlp.down_proj.register_forward_pre_hook(pre))
+    answer_lens = []
+    with torch.no_grad():
+        for i, (it, r) in enumerate(zip(items, recs)):
+            prompt = tok.apply_chat_template([{"role": "user", "content": it["user"]}], tokenize=False, add_generation_prompt=True,
+                                             enable_thinking=True)
+            p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
+            a_ids = tok(r["text"], add_special_tokens=False)["input_ids"][:ACT_ANSWER_TOKENS]
+            P, A = len(p_ids), len(a_ids)
+            answer_lens.append(A)
+            res = model(torch.tensor([p_ids + a_ids], device=dev), output_hidden_states=True)
+            rows = [(arrays["hidden_last_prompt"], arrays["hidden_mean_answer"], j, res.hidden_states[l][0]) for j, l in enumerate(layers)]
+            rows += [(arrays["mlp_last_prompt"], arrays["mlp_mean_answer"], j, captured[l]) for j, l in enumerate(mlp_layers)]
+            for last, mean, j, h in rows:
+                last[i, j] = h[P - 1].float().cpu().numpy()
+                if A:
+                    mean[i, j] = h[P:P + A].float().mean(0).cpu().numpy()
+    for h in hooks:
+        h.remove()
+    del model
+    if dev == "cuda":
+        torch.cuda.empty_cache()
+    os.makedirs(out, exist_ok=True)
+    for k, v in arrays.items():
+        np.save(os.path.join(out, k + ".npy"), v)
+    index = {"layers": layers, "mlp_layers": mlp_layers, "answer_tokens_averaged": answer_lens, "max_answer_tokens": ACT_ANSWER_TOKENS,
+             "files": {k + ".npy": list(v.shape) for k, v in arrays.items()},
+             "rows": [{"row": i, "key": r["key"], "sample": r["sample"], "correct": r["correct"], "failure": r["failure"],
+                       "finish": r["finish"], "tokens": r["tokens"]} for i, r in enumerate(recs)]}
+    with open(os.path.join(out, "index.json"), "w") as f:
+        json.dump(index, f, indent=1)
+    return {"files": index["files"], "layers": layers, "mlp_layers": mlp_layers}
 
 
 # ------------------------------------------------------------------ teacher-forced reads

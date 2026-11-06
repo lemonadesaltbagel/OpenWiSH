@@ -16,6 +16,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Experiment 8 scoring of an unedited run on a remote GPU now works. The empty staging folder was missing, and `rsync` failed with exit 23.
 - The experiment 8 remote worker no longer fills the disk. The remote machine deletes each pass folder after the copy back, and the worker keeps two edited checkpoints.
 - Experiment 8 teacher-forced passes refuse a request over 6 GB of output before loading the model, as the published prompt states.
+- The experiment 8 adapter no longer follows a symlink the agent planted at `/work/gen_<k>.jsonl` when copying generation results.
 
 ### Added
 
@@ -25,6 +26,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Pinned benchmark binaries and nonzero batch status on failed runs.
 - Per-task comparison checks for regressions, missing scores, external backend tools and audit gaps.
 - An optional `gpu_util` in the experiment 8 `remote.json`, for a GPU shared with another server.
+- Activations in experiment 8 generation passes (`"activations"`), as the published prompt offers. Before, the worker refused them.
 
 ### Changed
 

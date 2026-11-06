@@ -122,13 +122,47 @@ def forward():
         res = run_worker(args, stage, out)
     if res.get("ok") and kind == "generate":
         # also where the published prompt says they are: /work/gen_<k>.jsonl (gen_<k>_original/_edited with "both")
+        # and /work/gen_<k>_acts/ (one folder per model with "both")
         k = os.environ.get("OPENWISH_PASS", "0")
         work = os.environ.get("OPENWISH_WORK")
-        for f in ("gen.jsonl", "gen_original.jsonl", "gen_edited.jsonl"):
+        for f in ("gen.jsonl", "gen_original.jsonl", "gen_edited.jsonl", "gen_acts"):
             src = os.path.join(out, f)
             if work and os.path.exists(src):
-                shutil.copyfile(src, os.path.join(work, f"gen_{k}" + f[3:]))
+                copy_into_work(src, work, f"gen_{k}" + f[3:])
+        if work and os.path.isdir(os.path.join(out, "gen_acts")) and isinstance(res.get("activations"), dict):
+            res["activations"]["dir"] = f"/work/gen_{k}_acts/"
     return res
+
+
+def copy_into_work(src, work, name):
+    """Copy the file or folder `src` to `work`/`name`, replacing whatever the agent left at that name. The agent
+    controls /work, so the copy follows no symlink: the old entry goes first (rmtree does not follow links), and
+    each new entry gets created with O_EXCL and O_NOFOLLOW below a folder opened by descriptor."""
+    dst = os.path.join(work, name)
+    if os.path.isdir(dst) and not os.path.islink(dst):
+        shutil.rmtree(dst)
+    elif os.path.lexists(dst):
+        os.unlink(dst)
+    parent = os.open(work, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        _copy_at(src, parent, name)
+    finally:
+        os.close(parent)
+
+
+def _copy_at(src, dir_fd, name):
+    if os.path.isdir(src):
+        os.mkdir(name, 0o755, dir_fd=dir_fd)
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        try:
+            for entry in sorted(os.listdir(src)):
+                _copy_at(os.path.join(src, entry), fd, entry)
+        finally:
+            os.close(fd)
+        return
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dir_fd)
+    with open(src, "rb") as f, os.fdopen(fd, "wb") as g:
+        shutil.copyfileobj(f, g)
 
 
 def evaluate(a):
