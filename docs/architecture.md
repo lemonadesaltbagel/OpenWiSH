@@ -105,6 +105,7 @@ At the end of a run, `final/editset/` holds `manifest.json` and `edit.npz`: only
 | Handoff | A new conversation at 700,000 context tokens (default) or every N turns. The handoff restates the task and carries the budget line, `/work/notes.md` (up to 20,000 characters), the ledger summary and the pending message | `[handoff]` |
 | Retries | Transient backend errors retry with backoff from 10 s, doubling, up to 8 attempts | built in |
 | Refusals | The agent gets a notice and continues. Four refusals in a row end the run | built in |
+| Experimenter notices | A file `<run>/notices/<name>.txt` goes out once, at the end of the next message, as "NOTE FROM THE EXPERIMENTERS: ...". Several files go out in name order. `state.json` lists delivered names in `notices_delivered`. The published runs received notices this way mid-run | write the file while the run goes |
 | Crash-resume | State saves every turn. `--resume` restarts the kernel and reports a Python run cut off by a crash instead of running the code again | `openwish run --resume` |
 
 ## Run folder

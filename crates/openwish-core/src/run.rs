@@ -74,6 +74,8 @@ pub struct State {
     /// tool blocks sent back for a missing explanation, and blocks run without one after a full streak
     pub rationale_rejects: u32,
     pub rationale_missing_run: u32,
+    /// experimenter notices already delivered (file names under <run>/notices/)
+    pub notices_delivered: Vec<String>,
 }
 
 /// Machine-level settings (not part of a task).
@@ -397,8 +399,14 @@ impl Run {
         let turn = self.state.turn + 1;
         let tdir = self.dir.join(format!("turns/t{turn:03}"));
         std::fs::create_dir_all(&tdir)?;
-        let msg = self.state.next_message.clone();
+        let mut msg = self.state.next_message.clone();
         let new_conv = self.state.new_conversation;
+        for (name, text) in self.pending_notices() {
+            // a note from the experimenters to a running session, as the published runs received theirs
+            msg.push_str(&format!("\n\nNOTE FROM THE EXPERIMENTERS: {}", text.trim()));
+            self.log(&format!("turn {turn}: delivered notice {name}"));
+            self.state.notices_delivered.push(name);
+        }
         std::fs::write(tdir.join("prompt.txt"), &msg)?;
         let reply = self.send_with_retry(&msg, new_conv)?;
         self.state.turn = turn;
@@ -410,6 +418,24 @@ impl Run {
                 self.conclude_action()
             }
         }
+    }
+
+    /// Notices in <run>/notices/*.txt not yet delivered, in file-name order. Symlinks and folders do not count.
+    fn pending_notices(&self) -> Vec<(String, String)> {
+        let Ok(rd) = std::fs::read_dir(self.dir.join("notices")) else {
+            return vec![];
+        };
+        let mut names: Vec<String> = rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".txt") && !self.state.notices_delivered.contains(n))
+            .collect();
+        names.sort();
+        names
+            .into_iter()
+            .filter_map(|n| std::fs::read_to_string(self.dir.join("notices").join(&n)).ok().map(|t| (n, t)))
+            .collect()
     }
 
     /// Send one message, retrying transient errors with exponential backoff. `Ok(Err(why))` is a refusal.
@@ -2156,5 +2182,20 @@ out_dir = "attn/r{k}"
         r.run_to_end().unwrap();
         assert_eq!(r.state.passes_used.values().sum::<u32>(), 1);
         assert_eq!(r.state.rationale_rejects, 0);
+    }
+
+    #[test]
+    fn a_notice_file_is_delivered_once_with_the_next_message() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = task(d.path(), &format!("{FWD}[finish]\nrequire_all_passes = true\nmax_nudges = 1\n"));
+        let mut r = Run::create(spec, &d.path().join("run"), script(&["one", "two"]), env()).unwrap();
+        std::fs::create_dir_all(r.dir.join("notices/sub.txt")).unwrap();
+        std::fs::write(r.dir.join("notices/001_fix.txt"), "Layer 3 was layer 15.\n").unwrap();
+        std::fs::write(r.dir.join("notices/readme.md"), "not a notice").unwrap();
+        r.run_to_end().unwrap();
+        let first = turn_prompt(&r, 1);
+        assert!(first.ends_with("NOTE FROM THE EXPERIMENTERS: Layer 3 was layer 15."), "{first}");
+        assert!(!turn_prompt(&r, 2).contains("NOTE FROM THE EXPERIMENTERS"));
+        assert_eq!(r.state.notices_delivered, vec!["001_fix.txt".to_string()]);
     }
 }
