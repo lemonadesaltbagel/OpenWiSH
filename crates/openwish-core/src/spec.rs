@@ -37,6 +37,9 @@ pub struct TaskSpec {
     pub finish: FinishSpec,
     #[serde(default)]
     pub handoff: HandoffSpec,
+    /// a plain-English explanation required with every tool call (off by default)
+    #[serde(default)]
+    pub rationale: RationaleSpec,
     pub score: Option<CommandSpec>,
     /// backend defaults for this task (overridable on the command line)
     #[serde(default)]
@@ -158,6 +161,34 @@ pub struct FinishSpec {
     pub max_editor_cost_usd: f64,
 }
 
+/// The explanation rule. A reply with a tool block needs `min_words` words of plain English outside the block.
+/// The run sends a block with fewer words back unrun and uncharged, at most `max_rejects_in_row` times in a row,
+/// then runs the block and logs the missing explanation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RationaleSpec {
+    /// words outside the tool block the reply needs (0 = rule off)
+    #[serde(default)]
+    pub min_words: usize,
+    /// the tools under the rule (empty = every tool)
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default = "d_rejects")]
+    pub max_rejects_in_row: u32,
+}
+fn d_rejects() -> u32 {
+    2
+}
+impl Default for RationaleSpec {
+    fn default() -> Self {
+        RationaleSpec {
+            min_words: 0,
+            tools: vec![],
+            max_rejects_in_row: d_rejects(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValidationSpec {
@@ -245,6 +276,10 @@ impl TaskSpec {
         t.check_tool_tags()?;
         t.check_pools()?;
         t.check_mounts()?;
+        let tools = t.enabled_tools();
+        if let Some(tag) = t.rationale.tools.iter().find(|tag| !tools.contains(tag)) {
+            bail!("rationale.tools names {tag:?}, which the task does not enable (enabled: {tools:?})");
+        }
         if let Some(py) = &t.python {
             for rule in &py.reject_flags {
                 if !openwish_audit::known_rule(rule) {
@@ -410,6 +445,18 @@ mod tests {
         );
         let error = TaskSpec::load(&path).unwrap_err().to_string();
         assert!(error.contains("unknown static rule"), "{error}");
+    }
+
+    #[test]
+    fn rationale_tools_must_be_enabled_tools() {
+        let d = tempfile::tempdir().unwrap();
+        let toml = "id = \"t\"\nprompt = \"prompt.txt\"\n[python]\nruns = 1\n[rationale]\nmin_words = 5\n";
+        let t = TaskSpec::load(&write(d.path(), &format!("{toml}tools = [\"python\"]\n"))).unwrap();
+        assert_eq!((t.rationale.min_words, t.rationale.max_rejects_in_row), (5, 2));
+        let error = TaskSpec::load(&write(d.path(), &format!("{toml}tools = [\"pyhton\"]\n")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rationale.tools"), "{error}");
     }
 
     fn write(d: &Path, toml: &str) -> PathBuf {

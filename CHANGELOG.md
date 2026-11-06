@@ -31,6 +31,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Activations in experiment 8 generation passes (`"activations"`), as the published prompt offers. Before, the worker refused them.
 - `"texts_file"` in experiment 8 teacher-forced passes: the texts as a JSON file under `/work`, so an agent never types special tokens into a reply.
 - Per-episode editor caps: `[finish] max_editor_output_tokens`, `max_editor_total_tokens` and `max_editor_cost_usd`. Past a cap, the run ends and submits the current edit.
+- An optional `[rationale]` rule: a tool block without a plain-English explanation outside the block goes back unrun and uncharged, at most `max_rejects_in_row` times in a row.
 
 ### Changed
 

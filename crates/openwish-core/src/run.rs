@@ -69,6 +69,11 @@ pub struct State {
     /// replies with no text at all (not charged, not a final answer)
     pub empty_replies: u32,
     pub empty_streak: u32,
+    /// tool blocks sent back in a row for a missing explanation ([rationale])
+    pub rationale_streak: u32,
+    /// tool blocks sent back for a missing explanation, and blocks run without one after a full streak
+    pub rationale_rejects: u32,
+    pub rationale_missing_run: u32,
 }
 
 /// Machine-level settings (not part of a task).
@@ -569,12 +574,73 @@ impl Run {
         }
     }
 
+    /// Words of a reply outside the reply's fenced blocks: the plain-English explanation of a tool call.
+    fn explanation_words(text: &str) -> usize {
+        let mut words = 0;
+        let mut fence: Option<usize> = None;
+        for line in text.lines() {
+            let t = line.trim_start();
+            let ticks = t.chars().take_while(|c| *c == '`').count();
+            match fence {
+                None if ticks >= 3 => fence = Some(ticks),
+                None => {
+                    words += t
+                        .split_whitespace()
+                        .filter(|w| w.chars().any(|c| c.is_alphabetic()))
+                        .count()
+                }
+                Some(n) if ticks >= n && t[ticks..].trim().is_empty() => fence = None,
+                Some(_) => {}
+            }
+        }
+        words
+    }
+
+    /// The [rationale] rule: Some(message) when the run sends the tool call back unrun.
+    fn rationale_refusal(&mut self, tag: &str, text: &str) -> Result<Option<String>> {
+        let r = self.spec.rationale.clone();
+        if r.min_words == 0 || !(r.tools.is_empty() || r.tools.iter().any(|t| t == tag)) {
+            return Ok(None);
+        }
+        let words = Self::explanation_words(text);
+        if words >= r.min_words {
+            self.state.rationale_streak = 0;
+            return Ok(None);
+        }
+        let run_anyway = self.state.rationale_streak >= r.max_rejects_in_row;
+        let turn = self.state.turn;
+        self.tool_log(
+            json!({"kind": "rationale-missing", "turn": turn, "tool": tag, "words": words, "run_anyway": run_anyway}),
+        )?;
+        if run_anyway {
+            self.state.rationale_streak = 0;
+            self.state.rationale_missing_run += 1;
+            return Ok(None);
+        }
+        self.state.rationale_streak += 1;
+        self.state.rationale_rejects += 1;
+        Ok(Some(format!(
+            "EXPLAIN EVERY STEP: before the ```{tag} block, explain in plain English what this step does and why. \
+             The rule asks for at least {} words outside the block, and your reply had {words}. Nothing ran and \
+             nothing was charged. Send the same step again with the explanation.\n{}",
+            r.min_words,
+            self.budget_line()
+        )))
+    }
+
     fn act(&mut self, text: &str) -> Result<()> {
         if text.trim().is_empty() {
             return self.empty_reply();
         }
         self.state.empty_streak = 0;
-        match parse(text, &self.spec.enabled_tools()) {
+        let action = parse(text, &self.spec.enabled_tools());
+        if let Action::Tool { tag, .. } = &action {
+            if let Some(m) = self.rationale_refusal(tag, text)? {
+                self.state.next_message = m;
+                return Ok(());
+            }
+        }
+        match action {
             Action::Error(m) => {
                 self.state.protocol_errors += 1;
                 self.state.next_message = format!("{m}\n{}", self.budget_line());
@@ -2037,5 +2103,58 @@ out_dir = "attn/r{k}"
             Some("turn limit reached"),
             "no cap by default"
         );
+    }
+
+    fn rationale_rule_sends_unexplained_blocks_back_then_runs_after_the_streak() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = task(
+            d.path(),
+            &format!("{FWD}[rationale]\nmin_words = 5\nmax_rejects_in_row = 2\n"),
+        );
+        let bare = "```games\n{\"n\": 1}\n```";
+        let explained = "I probe the games now to check the effect of my edit.\n```games\n{\"n\": 1}\n```";
+        let ed = script(&[bare, explained, bare, bare, bare, "done"]);
+        let mut r = Run::create(spec, &d.path().join("run"), ed, env()).unwrap();
+        r.run_to_end().unwrap();
+        assert!(
+            turn_prompt(&r, 2).contains("EXPLAIN EVERY STEP"),
+            "{}",
+            turn_prompt(&r, 2)
+        );
+        // turn 1 sent back, 2 ran, 3 and 4 sent back, 5 ran after the streak of 2
+        assert_eq!(r.state.rationale_rejects, 3);
+        assert_eq!(r.state.rationale_missing_run, 1);
+        assert_eq!(r.state.passes_used.values().sum::<u32>(), 2);
+        assert_eq!(r.state.protocol_errors, 0);
+        let text = "Two words.\n```python\nx = 1 and more words\n```\nthree more words";
+        assert_eq!(Run::explanation_words(text), 5);
+    }
+
+    #[test]
+    fn rationale_rule_is_off_by_default_and_limited_to_its_tools() {
+        if !has_venv() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let spec = task(
+            d.path(),
+            &format!("{FWD}[python]\nruns = 3\n[rationale]\nmin_words = 5\ntools = [\"games\"]\n"),
+        );
+        let ed = script(&["```python\nx = 1\n```", "```games\n{}\n```", "done"]);
+        let mut r = Run::create(spec, &d.path().join("run"), ed, env()).unwrap();
+        r.run_to_end().unwrap();
+        assert_eq!(r.state.runs_used, 1, "python is not under the rule");
+        assert_eq!(r.state.rationale_rejects, 1);
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Run::create(
+            task(d.path(), FWD),
+            &d.path().join("run"),
+            script(&["```games\n{}\n```", "done"]),
+            env(),
+        )
+        .unwrap();
+        r.run_to_end().unwrap();
+        assert_eq!(r.state.passes_used.values().sum::<u32>(), 1);
+        assert_eq!(r.state.rationale_rejects, 0);
     }
 }
