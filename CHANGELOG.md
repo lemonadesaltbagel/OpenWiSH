@@ -27,6 +27,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Per-task comparison checks for regressions, missing scores, external backend tools and audit gaps.
 - An optional `gpu_util` in the experiment 8 `remote.json`, for a GPU shared with another server.
 - Activations in experiment 8 generation passes (`"activations"`), as the published prompt offers. Before, the worker refused them.
+- `"texts_file"` in experiment 8 teacher-forced passes: the texts as a JSON file under `/work`, so an agent never types special tokens into a reply.
 
 ### Changed
 

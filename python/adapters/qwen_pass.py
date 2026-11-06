@@ -15,6 +15,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -105,6 +106,49 @@ def run_worker(args_list, stage, out_dir):
     return json.loads(lines[-1])
 
 
+TEXTS_FILE_MAX_BYTES = 64_000_000
+
+
+def read_texts_file(guest):
+    """(texts, error) for "texts_file": a JSON list of strings at a path under /work, read from the run's work folder.
+    The agent controls /work, so the read follows the rules of paths::file_under: plain names only (no "..", "." or
+    empty parts), no symlink anywhere on the way, a regular file, at most TEXTS_FILE_MAX_BYTES. Each step opens by
+    descriptor with O_NOFOLLOW, so a link swapped in during the read fails too."""
+    work = os.environ.get("OPENWISH_WORK")
+    if not work or not isinstance(guest, str) or not guest.startswith("/work/"):
+        return None, '"texts_file" must be a path under /work'
+    parts = guest[len("/work/"):].split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None, '"texts_file" must be a plain path under /work, without "..", "." or "//"'
+    fd = os.open(work, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for p in parts[:-1]:
+            nxt = os.open(p, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        f = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except FileNotFoundError:
+        return None, f"no file {guest}"
+    except OSError:
+        return None, f"{guest} must be a regular file under /work, reached without symbolic links"
+    finally:
+        os.close(fd)
+    if not stat.S_ISREG(os.fstat(f).st_mode):
+        os.close(f)
+        return None, f"{guest} must be a regular file under /work, reached without symbolic links"
+    with os.fdopen(f, "rb") as fh:
+        data = fh.read(TEXTS_FILE_MAX_BYTES + 1)
+    if len(data) > TEXTS_FILE_MAX_BYTES:
+        return None, f"{guest} is larger than {TEXTS_FILE_MAX_BYTES:,} bytes"
+    try:
+        texts = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as e:
+        return None, f"{guest} is not valid JSON ({e})"
+    if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
+        return None, f"{guest} must hold a JSON list of strings"
+    return texts, None
+
+
 def forward():
     req_path = os.environ["OPENWISH_REQ"]
     try:
@@ -116,6 +160,18 @@ def forward():
         return {"ok": False, "error": 'the request needs "type": "generate" or "teacher_forced"'}
     out = os.environ["OPENWISH_OUT"]
     with tempfile.TemporaryDirectory() as tmp:
+        if kind == "teacher_forced" and "texts_file" in req:
+            # texts written from Python, for example with the chat template's special tokens, which an editor
+            # typing them into a reply sometimes emits as its own end of turn
+            if "texts" in req or "chats" in req:
+                return {"ok": False, "error": 'give one of "texts", "texts_file" or "chats"'}
+            texts, err = read_texts_file(req.pop("texts_file"))
+            if err:
+                return {"ok": False, "error": err}
+            req["texts"] = texts
+            req_path = os.path.join(tmp, "req.json")
+            with open(req_path, "w") as f:
+                json.dump(req, f)
         stage = {"edits": os.path.join(tmp, "edits"), "req": req_path}
         stage["tag"] = stage_edits(os.environ["OPENWISH_NET"], edited_names(os.environ["OPENWISH_RUN_DIR"]), stage["edits"])
         args = [kind, "--model", "{model}", "--edits", "{edits}", "--req", "{req}", "--out", "{out}", "--practice", "{practice}"]
