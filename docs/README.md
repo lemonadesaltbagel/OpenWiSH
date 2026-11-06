@@ -10,6 +10,8 @@
 | [Safety](safety.md) | See what OpenWiSH enforces, the path rules, and the known gaps |
 | [Access levels](access-levels.md) | Know what a result is evidence of: weights as text, code, network runs, shown behaviour, data |
 | [Benchmarks](benchmarks.md) | Check conformance results, the method, and live agent results |
+| [This fork](fork.md) | See every change of the `integrated` branch and install without sudo |
+| [Hold-out scorer](holdout.md) | Score an exp8 checkpoint on MMLU-Pro, GPQA Diamond and IFEval with the authors' protocol |
 | [Configuration](configuration.md) | Set environment variables, flags, and a remote GPU |
 | [Roadmap](roadmap.md) | See what comes next and where to help |
 | [Design decisions](harness-decisions.html) | Read every design call with the alternative and the cost |

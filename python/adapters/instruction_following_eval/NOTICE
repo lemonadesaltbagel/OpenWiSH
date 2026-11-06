@@ -1,0 +1,11 @@
+IFEval's official instruction checkers, vendored unchanged (byte-identical) from
+google-research/google-research, directory instruction_following_eval/, commit
+66cf8a062384a1dac7aeecc83b92114eba5c153a (2026-11-05):
+  instructions.py           sha256 60e086f5342a03ce8e18b64bbcccf86308f523c08aa826707a562150a52f3edf
+  instructions_registry.py  sha256 ec92d72c264f6d906978613085db262356174300370a3fffe6fefd5969ce9cfc
+  instructions_util.py      sha256 a73797261eee5bf447e279d82a2b700b1bdd3cb1193412dbab1270a85832bc6b
+Copyright The Google Research Authors. Licensed under the Apache License, Version 2.0 (LICENSE in this directory).
+__init__.py is empty, added here for the files' own `from instruction_following_eval import ...`.
+Dependencies: nltk (punkt_tab data; nltk >= 3.9 serves the files' punkt/english.pickle request from punkt_tab),
+langdetect, immutabledict, absl-py. An AST comparison with lm-evaluation-harness's copy (lm_eval/tasks/ifeval,
+commit d6de81643928d653435c431bae19945d41d32520) shows no behavioural difference (logging and NLTK download only).
