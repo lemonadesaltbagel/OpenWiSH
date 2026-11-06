@@ -434,7 +434,11 @@ impl Run {
         names.sort();
         names
             .into_iter()
-            .filter_map(|n| std::fs::read_to_string(self.dir.join("notices").join(&n)).ok().map(|t| (n, t)))
+            .filter_map(|n| {
+                std::fs::read_to_string(self.dir.join("notices").join(&n))
+                    .ok()
+                    .map(|t| (n, t))
+            })
             .collect()
     }
 
@@ -2131,6 +2135,7 @@ out_dir = "attn/r{k}"
         );
     }
 
+    #[test]
     fn rationale_rule_sends_unexplained_blocks_back_then_runs_after_the_streak() {
         let d = tempfile::tempdir().unwrap();
         let spec = task(
@@ -2187,14 +2192,20 @@ out_dir = "attn/r{k}"
     #[test]
     fn a_notice_file_is_delivered_once_with_the_next_message() {
         let d = tempfile::tempdir().unwrap();
-        let spec = task(d.path(), &format!("{FWD}[finish]\nrequire_all_passes = true\nmax_nudges = 1\n"));
+        let spec = task(
+            d.path(),
+            &format!("{FWD}[finish]\nrequire_all_passes = true\nmax_nudges = 1\n"),
+        );
         let mut r = Run::create(spec, &d.path().join("run"), script(&["one", "two"]), env()).unwrap();
         std::fs::create_dir_all(r.dir.join("notices/sub.txt")).unwrap();
         std::fs::write(r.dir.join("notices/001_fix.txt"), "Layer 3 was layer 15.\n").unwrap();
         std::fs::write(r.dir.join("notices/readme.md"), "not a notice").unwrap();
         r.run_to_end().unwrap();
         let first = turn_prompt(&r, 1);
-        assert!(first.ends_with("NOTE FROM THE EXPERIMENTERS: Layer 3 was layer 15."), "{first}");
+        assert!(
+            first.ends_with("NOTE FROM THE EXPERIMENTERS: Layer 3 was layer 15."),
+            "{first}"
+        );
         assert!(!turn_prompt(&r, 2).contains("NOTE FROM THE EXPERIMENTERS"));
         assert_eq!(r.state.notices_delivered, vec!["001_fix.txt".to_string()]);
     }
