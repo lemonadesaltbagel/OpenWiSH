@@ -152,6 +152,7 @@ data = ["practice problems with answers"]   # anything mounted besides the netwo
 | `[edits.policy]` | `allowed`, `forbidden` | all, none | Globs with `*` and `?` |
 | `[edits.policy]` | `forbid_whole_tensor_scale`, `max_frac_changed` | `false`, none | Refuse `W *= c` over a whole tensor, cap the fraction of entries changed |
 | `[finish]` | `require_all_passes`, `max_turns`, `max_nudges` | `false`, 400, 5 | End conditions. The nudge cap also bounds format repairs |
+| `[finish]` | `max_editor_output_tokens`, `max_editor_total_tokens`, `max_editor_cost_usd` | 0, 0, 0 (no cap) | Per-episode editor caps. Past a cap, the run ends before the next turn and submits the current edit. Output tokens include reasoning. Total tokens add input, cached input and output. The cost cap needs a backend reporting cost |
 | `[finish.validation]` | `command`, `timeout_s`, `submission_file` | no validator, 60 s, none | Optional format check. A plain file under `/work` takes precedence over the final reply |
 | `[handoff]` | `max_conversation_tokens`, `max_turns_per_conversation` | 700000, 0 | When to start a new conversation |
 | `[editor]` | `backend`, `model`, `effort` | `claude`, per backend, none | Defaults. Command-line flags win |

@@ -341,7 +341,38 @@ impl Run {
             self.finalize("", "turn limit reached")?;
             return Ok(Step::Done);
         }
+        if let Some(why) = self.editor_cap_reached() {
+            self.finalize("", &why)?;
+            self.save_state()?;
+            return Ok(Step::Done);
+        }
         self.take_turn()
+    }
+
+    /// The per-episode editor cap the run has reached, if any (`[finish] max_editor_*`).
+    fn editor_cap_reached(&self) -> Option<String> {
+        let f = &self.spec.finish;
+        let u = &self.state.usage_total;
+        if f.max_editor_output_tokens > 0 && u.output >= f.max_editor_output_tokens {
+            return Some(format!(
+                "editor output-token cap reached ({} >= {})",
+                u.output, f.max_editor_output_tokens
+            ));
+        }
+        let total = u.context_tokens();
+        if f.max_editor_total_tokens > 0 && total >= f.max_editor_total_tokens {
+            return Some(format!(
+                "editor total-token cap reached ({total} >= {})",
+                f.max_editor_total_tokens
+            ));
+        }
+        if f.max_editor_cost_usd > 0.0 && self.state.cost_usd >= f.max_editor_cost_usd {
+            return Some(format!(
+                "editor cost cap reached (${:.2} >= ${:.2})",
+                self.state.cost_usd, f.max_editor_cost_usd
+            ));
+        }
+        None
     }
 
     /// A reply that arrived before a crash is acted on first.
@@ -1943,5 +1974,68 @@ out_dir = "attn/r{k}"
         assert_eq!(r2.state.end_reason.as_deref(), Some("the editor sent empty replies"));
         assert_eq!(r2.state.turn, 4);
         assert!(r2.dir.join("final/net").exists());
+    }
+
+    /// An editor that reports a fixed usage per reply (for the per-episode caps).
+    struct Costly {
+        inner: Scripted,
+        output: u64,
+        cost: f64,
+    }
+    impl Editor for Costly {
+        fn name(&self) -> String {
+            "costly".into()
+        }
+        fn send(&mut self, m: &str, n: bool) -> std::result::Result<Reply, BackendError> {
+            let mut r = self.inner.send(m, n)?;
+            r.usage.output = self.output;
+            r.usage.input = 10;
+            r.cost_usd = Some(self.cost);
+            Ok(r)
+        }
+        fn session(&self) -> Option<String> {
+            None
+        }
+        fn set_session(&mut self, _: Option<String>) {}
+    }
+
+    fn capped_run(d: &Path, cap: &str, output: u64, cost: f64) -> Run {
+        let spec = task(d, &format!("{FWD}[finish]\n{cap}\n"));
+        let step = "Probe.\n```games\n{\"n\": 1}\n```";
+        let inner = Scripted::new(vec![step.into(); 10]);
+        let ed = Box::new(Costly { inner, output, cost });
+        let mut r = Run::create(spec, &d.join("run"), ed, env()).unwrap();
+        r.run_to_end().unwrap();
+        r
+    }
+
+    #[test]
+    fn editor_output_cap_ends_the_run_and_submits() {
+        let d = tempfile::tempdir().unwrap();
+        let r = capped_run(d.path(), "max_editor_output_tokens = 250", 100, 0.0);
+        assert!(r.state.done);
+        assert_eq!(r.state.turn, 3, "the cap is checked before each turn");
+        let why = r.state.end_reason.as_deref().unwrap();
+        assert!(why.contains("output-token cap"), "{why}");
+        assert!(r.dir.join("final/net").exists());
+    }
+
+    #[test]
+    fn editor_total_token_and_cost_caps_end_the_run() {
+        let d = tempfile::tempdir().unwrap();
+        let r = capped_run(d.path(), "max_editor_total_tokens = 200", 100, 0.0);
+        assert_eq!(r.state.turn, 2, "110 tokens per turn");
+        assert!(r.state.end_reason.as_deref().unwrap().contains("total-token cap"));
+        let d = tempfile::tempdir().unwrap();
+        let r = capped_run(d.path(), "max_editor_cost_usd = 1.0", 1, 0.4);
+        assert_eq!(r.state.turn, 3);
+        assert!(r.state.end_reason.as_deref().unwrap().contains("cost cap"));
+        let d = tempfile::tempdir().unwrap();
+        let r = capped_run(d.path(), "max_turns = 4", 1_000_000, 100.0);
+        assert_eq!(
+            r.state.end_reason.as_deref(),
+            Some("turn limit reached"),
+            "no cap by default"
+        );
     }
 }

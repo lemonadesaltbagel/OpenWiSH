@@ -147,6 +147,15 @@ pub struct FinishSpec {
     pub max_nudges: u32,
     /// Optional format-only validation before accepting a final reply.
     pub validation: Option<ValidationSpec>,
+    /// Per-episode editor caps, 0 for no cap. A run past a cap ends before the next turn and submits the current
+    /// edit. Output tokens include reasoning. Total tokens add input, cached input and output over every turn.
+    #[serde(default)]
+    pub max_editor_output_tokens: u64,
+    #[serde(default)]
+    pub max_editor_total_tokens: u64,
+    /// Enforced only for backends reporting cost.
+    #[serde(default)]
+    pub max_editor_cost_usd: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +183,9 @@ impl Default for FinishSpec {
             max_turns: d_turns(),
             max_nudges: d_nudges(),
             validation: None,
+            max_editor_output_tokens: 0,
+            max_editor_total_tokens: 0,
+            max_editor_cost_usd: 0.0,
         }
     }
 }
