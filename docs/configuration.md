@@ -107,6 +107,7 @@ The `tasks/exp8` probe and scorer run `python/adapters/qwen_worker.py` on a GPU.
 | `key` | Private key file, `~` expanded (default `~/.ssh/id_rsa`) |
 | `root` | Folder on the remote machine for the model, the data, the edits and the outputs |
 | `python` | A Python on the remote machine with `vllm`, `transformers`, `safetensors` and `math-verify` |
+| `gpu_util` | Optional. The vLLM GPU memory share on the remote machine (`QWEN_GPU_UTIL`), for a GPU shared with another server |
 
 Copy the model, the practice and evaluation sets, and the worker to the remote machine once:
 
@@ -114,4 +115,4 @@ Copy the model, the practice and evaluation sets, and the worker to the remote m
 assets/venvs/sandbox/bin/python python/adapters/qwen_pass.py --setup-remote
 ```
 
-Each pass then stages only the edited tensors, sends them with `rsync` over SSH, runs the worker, and copies the outputs back into the run. The local machine needs `ssh` and `rsync`. `git` ignores `assets/`, so `remote.json` stays out of commits.
+Each pass then stages only the edited tensors, sends them with `rsync` over SSH, runs the worker, and copies the outputs back into the run. After the copy succeeds, the remote machine deletes the pass folder. The worker keeps the two most recently used edited checkpoints (1.6 GB each) and rebuilds older ones on demand. The local machine needs `ssh` and `rsync`. `git` ignores `assets/`, so `remote.json` stays out of commits.

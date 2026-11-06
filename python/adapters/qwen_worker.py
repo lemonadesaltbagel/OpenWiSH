@@ -20,7 +20,8 @@ import sys
 
 INSTRUCTION = "Please reason step by step, and put your final answer within \\boxed{}."
 SAMPLING = dict(temperature=0.6, top_p=0.95, top_k=20, presence_penalty=1.5)
-LIMITS = dict(gen_max=512, tf_max_texts=1024, tf_max_tokens=32768, tf_total_tokens=524288, attn_max_texts=2, attn_max_tokens=2048)
+LIMITS = dict(gen_max=512, tf_max_texts=1024, tf_max_tokens=32768, tf_total_tokens=524288, attn_max_texts=2, attn_max_tokens=2048,
+              tf_max_bytes=6e9)
 FULL_ATTENTION = (3, 7, 11, 15, 19, 23)
 
 
@@ -85,7 +86,9 @@ def checkpoint(model_dir, edits, work):
         h.update(open(os.path.join(edits, f), "rb").read())
     tag = h.hexdigest()[:16]
     out = os.path.join(work, "ckpt_" + tag)
+    prune_checkpoints(work, keep=out)
     if os.path.exists(os.path.join(out, "model.safetensors")):
+        os.utime(out)  # mark the checkpoint as recently used
         return out, tag
     import numpy as np
     import torch
@@ -106,6 +109,18 @@ def checkpoint(model_dir, edits, work):
         if f != "model.safetensors":
             shutil.copyfile(os.path.join(model_dir, f), os.path.join(out, f))
     return out, tag
+
+
+def prune_checkpoints(work, keep, n_keep=2):
+    """Delete all but the `n_keep` most recently used edited checkpoints, counting `keep` as one of them.
+    Each checkpoint takes 1.6 GB, and `checkpoint` rebuilds a deleted one on demand."""
+    try:
+        others = [os.path.join(work, d) for d in os.listdir(work) if d.startswith("ckpt_")]
+    except OSError:
+        return
+    others = sorted((d for d in others if os.path.abspath(d) != os.path.abspath(keep)), key=os.path.getmtime, reverse=True)
+    for d in others[max(n_keep - 1, 0):]:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # ------------------------------------------------------------------ generation
@@ -240,6 +255,21 @@ def generate(args, req, ckpt_edit):
 
 
 # ------------------------------------------------------------------ teacher-forced reads
+def tf_output_bytes(n, T, cfg, hs_layers, mlp_layers, topk, logprobs):
+    """Bytes of the arrays a teacher-forced pass returns. Every array pads each text to the longest one (T tokens)."""
+    per_token = 8 + (4 if logprobs else 0) + 12 * topk  # input ids, token log-probs, top-k values and ids
+    per_token += 2 * (cfg["hidden_size"] * len(hs_layers) + cfg["intermediate_size"] * len(mlp_layers))  # float16
+    return n * T * per_token
+
+
+def check_tf_size(n, T, cfg, hs_layers, mlp_layers, topk, logprobs):
+    """The published limit: a pass returns at most 6 GB. Checked before the model loads or any array exists."""
+    est = tf_output_bytes(n, T, cfg, hs_layers, mlp_layers, topk, logprobs)
+    if est > LIMITS["tf_max_bytes"]:
+        raise Bad(f"this request returns about {est / 1e9:.1f} GB, and a pass returns at most 6 GB. Arrays pad every text "
+                  "to the longest text. Request fewer layers, or fewer or shorter texts")
+
+
 def teacher_forced(args, req, ckpt):
     import numpy as np
     import torch
@@ -269,6 +299,9 @@ def teacher_forced(args, req, ckpt):
     topk = int(ret.get("topk", 0) or 0)
     if topk > 50:
         raise Bad("topk is at most 50")
+    cfg = json.load(open(os.path.join(ckpt, "config.json")))
+    check_tf_size(len(ids), max(len(x) for x in ids), cfg.get("text_config", cfg), hs_layers, mlp_layers, topk,
+                  bool(ret.get("token_logprobs")))
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModelForCausalLM.from_pretrained(ckpt, dtype=torch.bfloat16, attn_implementation="eager" if attn else None).to(dev).eval()
     layers = model.model.layers

@@ -13,6 +13,9 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Codex progress messages no longer become part of the final reply. Raw events stay in the run record.
 - The kernel retains the optimiser base class while replacing forbidden constructors.
 - Temporary edit arrays are removed after refused or interrupted RPCs.
+- Experiment 8 scoring of an unedited run on a remote GPU now works. The empty staging folder was missing, and `rsync` failed with exit 23.
+- The experiment 8 remote worker no longer fills the disk. The remote machine deletes each pass folder after the copy back, and the worker keeps two edited checkpoints.
+- Experiment 8 teacher-forced passes refuse a request over 6 GB of output before loading the model, as the published prompt states.
 
 ### Added
 
@@ -21,6 +24,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - Optional pre-execution static-rule blocking, including matrix and scalar ReLU patterns.
 - Pinned benchmark binaries and nonzero batch status on failed runs.
 - Per-task comparison checks for regressions, missing scores, external backend tools and audit gaps.
+- An optional `gpu_util` in the experiment 8 `remote.json`, for a GPU shared with another server.
 
 ### Changed
 

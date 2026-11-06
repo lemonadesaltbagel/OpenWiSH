@@ -3,7 +3,8 @@ with the request to a GPU machine, runs python/adapters/qwen_worker.py there and
 
 The GPU machine is this computer, unless assets/exp8/remote.json (or $OPENWISH_QWEN_REMOTE) names a remote one:
   {"host": "root@1.2.3.4", "port": 12345, "key": "~/.ssh/id_rsa", "root": "/root/openwish", "python": "/root/qwen/bin/python"}
-Run `qwen_pass.py --setup-remote` once to copy the model, practice and evaluation sets and the worker there.
+An optional "gpu_util" sets the vLLM GPU memory share on the remote machine (QWEN_GPU_UTIL), for a GPU shared with
+another server. Run `qwen_pass.py --setup-remote` once to copy the model, practice and evaluation sets and the worker there.
 
 forward pass (harness):  OPENWISH_REQ, OPENWISH_NET, OPENWISH_OUT, OPENWISH_RUN_DIR, OPENWISH_WORK, OPENWISH_PASS
 scorer:                  qwen_pass.py --evaluate --sets math500 --limit 500 [--samples 1]   (OPENWISH_RUN, OPENWISH_FINAL_NET)
@@ -87,12 +88,16 @@ def run_worker(args_list, stage, out_dir):
         argv = [c["python"], f"{r}/qwen_worker.py"] + [a.format(**rem) for a in args_list] + ["--work", f"{r}/work"]
         # the remote venv's bin must be on PATH: vLLM's kernel builds call tools installed there (ninja)
         env = f"export PATH={shlex.quote(os.path.dirname(c['python']))}:$PATH VLLM_USE_FLASHINFER_SAMPLER=0; "
+        if c.get("gpu_util"):
+            env += f"export QWEN_GPU_UTIL={float(c['gpu_util'])}; "
         p = subprocess.run(ssh_base(c) + [env + " ".join(shlex.quote(x) for x in argv)], capture_output=True, text=True)
         tail = p.stderr[-3000:]
         os.makedirs(out_dir, exist_ok=True)
         try:
             rsync(c, f"{c['host']}:{rem['out']}/", out_dir + "/")
-        except subprocess.CalledProcessError:
+            # the outputs now sit in the run folder, so free the remote disk (teacher-forced arrays reach several GB)
+            subprocess.run(ssh_base(c) + [f"rm -rf {rem['out']} {rem['req']}"], capture_output=True, timeout=120)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
     lines = [l for l in p.stdout.splitlines() if l.strip().startswith("{")]
     if not lines:
@@ -133,6 +138,7 @@ def evaluate(a):
     results = {}
     with tempfile.TemporaryDirectory() as tmp:
         stage = {"edits": os.path.join(tmp, "edits")}
+        os.makedirs(stage["edits"], exist_ok=True)  # an unedited run sends an empty folder, and rsync needs the folder
         stage["tag"] = stage_edits(net, names, stage["edits"]) if names else "base"
         for s in a.sets.split(","):
             out = os.path.join(run or tmp, "eval", f"qwen_{s}")
