@@ -389,6 +389,9 @@ def teacher_forced(args, req, ckpt):
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model = AutoModelForCausalLM.from_pretrained(ckpt, dtype=torch.bfloat16, attn_implementation="eager" if attn else None).to(dev).eval()
     layers = model.model.layers
+    # transformers records attention probabilities only in the full-attention layers (Qwen3_5Attention), so
+    # r.attentions holds one entry per full-attention layer, in layer order
+    full = [i for i, t in enumerate(getattr(model.config, "layer_types", None) or []) if t == "full_attention"]
     captured = {}
     hooks = []
     for l in mlp_layers:
@@ -427,7 +430,12 @@ def teacher_forced(args, req, ckpt):
                 outs[f"mlp_act_{l}"][i, :L] = captured[l]
             if attn:
                 for l in attn:
-                    a = r.attentions[l]
+                    if len(r.attentions) == len(full):
+                        a = r.attentions[full.index(l)]
+                    elif len(r.attentions) == len(layers):
+                        a = r.attentions[l]
+                    else:
+                        raise Bad(f"the model returned {len(r.attentions)} attention arrays for {len(layers)} layers")
                     if a is None:
                         raise Bad(f"layer {l} returned no attention probabilities")
                     attn_out.setdefault(l, []).append(a[0].float().cpu().numpy().astype(np.float16))

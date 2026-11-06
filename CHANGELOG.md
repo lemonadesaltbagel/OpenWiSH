@@ -17,6 +17,7 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - The experiment 8 remote worker no longer fills the disk. The remote machine deletes each pass folder after the copy back, and the worker keeps two edited checkpoints.
 - Experiment 8 teacher-forced passes refuse a request over 6 GB of output before loading the model, as the published prompt states.
 - The experiment 8 adapter no longer follows a symlink the agent planted at `/work/gen_<k>.jsonl` when copying generation results.
+- Experiment 8 teacher-forced passes with `attn_layers` return attention probabilities. Before, layers 7 to 23 failed with `IndexError` and layer 3 returned the probabilities of layer 15: transformers returns one attention array per full-attention layer, not one per layer.
 
 ### Added
 
