@@ -68,6 +68,10 @@ struct RunArgs {
     /// do not score the run when it ends
     #[arg(long)]
     no_score: bool,
+    /// start a new conversation (a handoff) once the editor's context reaches this many tokens, in place of the
+    /// task's [handoff] max_conversation_tokens. Set the value below the editor model's context window. New runs only
+    #[arg(long)]
+    max_conversation_tokens: Option<u64>,
 }
 
 #[derive(Subcommand)]
@@ -366,11 +370,17 @@ fn main() -> Result<()> {
 /// `openwish run`: create or resume a run, step it to the end with one status line per turn, then score it.
 fn run_task(a: RunArgs, pc: &ProjectConfig, threads: usize) -> Result<()> {
     let mut run = if let Some(dir) = a.resume {
+        if a.max_conversation_tokens.is_some() {
+            bail!("--max-conversation-tokens applies to a new run. A resumed run keeps the setting saved in spec.json");
+        }
         let ed = editor(&a.editor, &saved_spec(&dir)?, &dir, pc)?;
         Run::resume(&dir, ed, env(pc, threads)?)?
     } else {
         let task = a.task.context("give a task file, or --resume <run dir>")?;
-        let spec = TaskSpec::load(&task)?;
+        let mut spec = TaskSpec::load(&task)?;
+        if let Some(n) = a.max_conversation_tokens {
+            spec.handoff.max_conversation_tokens = n;
+        }
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let dir = a
             .out

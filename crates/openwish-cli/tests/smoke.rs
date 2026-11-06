@@ -95,3 +95,48 @@ fn toy_run_score_replay_and_status() {
         .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
 }
+
+#[test]
+fn max_conversation_tokens_overrides_the_task_handoff_for_a_new_run() {
+    if !root().join("assets/venvs/sandbox/bin/python").exists() {
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("run");
+    let bin = env!("CARGO_BIN_EXE_openwish");
+    let r = Command::new(bin)
+        .current_dir(root())
+        .args([
+            "run",
+            "tasks/toy/task.toml",
+            "--backend",
+            "scripted:tasks/toy/script.txt",
+        ])
+        .args(["--no-score", "--max-conversation-tokens", "12345", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("spec.json")).unwrap()).unwrap();
+    assert_eq!(saved["spec"]["handoff"]["max_conversation_tokens"], 12345);
+    // a resumed run keeps its saved setting
+    let r = Command::new(bin)
+        .current_dir(root())
+        .args(["run", "--resume"])
+        .arg(&out)
+        .args([
+            "--backend",
+            "scripted:tasks/toy/script.txt",
+            "--max-conversation-tokens",
+            "5",
+        ])
+        .output()
+        .unwrap();
+    assert!(!r.status.success());
+    assert!(
+        String::from_utf8_lossy(&r.stderr).contains("new run"),
+        "{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+}

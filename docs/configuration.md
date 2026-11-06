@@ -46,7 +46,7 @@ OPENWISH_THREADS=8 OPENWISH_NICE=0 openwish run tasks/exp6/budget_50.toml
 
 | Command | Flags |
 |---|---|
-| `openwish run <task.toml>` | `--out <dir>` (default `runs/<id>-<time>`), `--no-score`, plus the backend flags |
+| `openwish run <task.toml>` | `--out <dir>` (default `runs/<id>-<time>`), `--no-score`, `--max-conversation-tokens <n>` (in place of the task's `[handoff]` value, for an editor with a small context window), plus the backend flags |
 | `openwish run --resume <run>` | the backend flags |
 | `openwish score <run>` | none |
 | `openwish audit <run>` | `--batch <n>` (default 8), plus the backend flags (effort defaults to `medium`) |
