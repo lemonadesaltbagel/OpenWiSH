@@ -34,7 +34,13 @@ All notable changes to OpenWiSH. The format follows [Keep a Changelog](https://k
 - An optional `[rationale]` rule: a tool block without a plain-English explanation outside the block goes back unrun and uncharged, at most `max_rejects_in_row` times in a row.
 - `openwish run --max-conversation-tokens <n>` sets the handoff threshold of a new run, for an editor with a context window below the task's `[handoff]` value.
 
+- Experimenter notices: a file in `<run>/notices/*.txt` goes out once with the next message, as "NOTE FROM THE EXPERIMENTERS: ...".
+- An optional experiment 8 hold-out scorer: MMLU-Pro (the authors' 1,000 questions), GPQA Diamond and IFEval with the authors' protocol, through `qwen_pass.py --evaluate --sets mmlupro1k,gpqa,ifeval`. See [Hold-out scorer](docs/holdout.md).
+- `scripts/setup_nosudo.sh`: bubblewrap, Rust, uv, Python and the venvs on Linux or WSL without sudo. See [docs/fork.md](docs/fork.md).
+
 ### Changed
+
+- The experiment 8 remote passes compress `rsync` transfers (`-az`).
 
 - Tensor values are shared copy-on-write. A gate's current network holds new memory only for edited tensors. Peak `openwish run` memory on experiment 8 fell from 6.0 GB to 4.0 GB.
 

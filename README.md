@@ -2,6 +2,8 @@
 
 **Open Weight-Space Harness for Weight-Space programming.**
 
+> This `integrated` branch merges proposed changes ahead of upstream. See [docs/fork.md](docs/fork.md) for every difference and a no-sudo install.
+
 An agent reads and writes neural-network weights directly. OpenWiSH gives the agent a sandbox, budgeted probes, one edit gate and an audit trail. The goal: a shared instrument for mechanistic interpretability research and for decoding networks into programs.
 
 [![CI](https://github.com/Alexander-Aghili/OpenWiSH/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexander-Aghili/OpenWiSH/actions/workflows/ci.yml)
